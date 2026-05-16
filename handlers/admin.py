@@ -1,5 +1,5 @@
 """
-Админ-панель бота.
+Админ-панель бота. Только приватный чат.
 /admin → 📊 Статистика, 👥 Пользователи, ⭐ Выдать звёзды, 💰 Цены.
 """
 from __future__ import annotations
@@ -20,7 +20,11 @@ from database import (
 from utils import bot_is_admin, format_stars
 
 logger = logging.getLogger(__name__)
+
+# ── Роутер только для ПРИВАТНЫХ чатов ────────────────────────
 router = Router()
+router.message.filter(F.chat.type == "private")
+router.callback_query.filter(F.message.chat.type == "private")
 
 
 class AdminState(StatesGroup):
@@ -31,8 +35,6 @@ class AdminState(StatesGroup):
 def is_admin(user_id: int) -> bool:
     return user_id in ADMINS
 
-
-# ── /admin ───────────────────────────────────────────────────
 
 @router.message(Command("admin"))
 async def cmd_admin(message: Message, state: FSMContext):
@@ -58,8 +60,6 @@ async def adm_menu(call: CallbackQuery, state: FSMContext):
     )
     await call.answer()
 
-
-# ── 📊 Статистика ────────────────────────────────────────────
 
 @router.callback_query(F.data == "adm:stats")
 async def adm_stats(call: CallbackQuery, bot: Bot):
@@ -92,8 +92,6 @@ async def adm_stats(call: CallbackQuery, bot: Bot):
     await call.answer()
 
 
-# ── 👥 Все пользователи ──────────────────────────────────────
-
 @router.callback_query(F.data == "adm:users")
 async def adm_users(call: CallbackQuery):
     if not is_admin(call.from_user.id):
@@ -125,8 +123,6 @@ async def adm_users(call: CallbackQuery):
     await call.message.edit_text("\n".join(lines), reply_markup=admin_back_kb())
     await call.answer()
 
-
-# ── ⭐ Выдать звёзды ─────────────────────────────────────────
 
 @router.callback_query(F.data == "adm:give_stars")
 async def adm_give_stars_prompt(call: CallbackQuery, state: FSMContext):
@@ -183,8 +179,6 @@ async def adm_give_stars_process(message: Message, state: FSMContext):
     )
     await state.clear()
 
-
-# ── 💰 Изменить цены ─────────────────────────────────────────
 
 @router.callback_query(F.data == "adm:prices")
 async def adm_prices(call: CallbackQuery):
@@ -277,8 +271,6 @@ async def adm_price_edit_process(message: Message, state: FSMContext):
     )
     await state.clear()
 
-
-# ── /status и /check ─────────────────────────────────────────
 
 @router.message(Command("status"))
 async def cmd_status(message: Message, bot: Bot):
