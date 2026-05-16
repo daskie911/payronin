@@ -1,6 +1,8 @@
 """
 Обработчики пользовательских команд и навигации.
 /start, меню, баланс, пополнение, выбор услуги, FSM-ввод данных.
+
+ВАЖНО: все хендлеры работают ТОЛЬКО в приватном чате (F.chat.type == "private").
 """
 from __future__ import annotations
 
@@ -24,7 +26,11 @@ from utils import resolve_user_id, format_stars, user_is_admin
 from database import get_user_purchases, ensure_user, get_user_balance
 
 logger = logging.getLogger(__name__)
+
+# ── Роутер только для ПРИВАТНЫХ чатов ────────────────────────
 router = Router()
+router.message.filter(F.chat.type == "private")
+router.callback_query.filter(F.message.chat.type == "private")
 
 
 # ── FSM-состояния ────────────────────────────────────────────
@@ -37,7 +43,7 @@ class OrderState(StatesGroup):
     waiting_photo = State()
     waiting_forward = State()
     confirming = State()
-    waiting_custom_topup = State()   # ввод своей суммы пополнения
+    waiting_custom_topup = State()
 
 
 # ── /start ───────────────────────────────────────────────────
@@ -130,23 +136,19 @@ async def topup_custom_process(message: Message, state: FSMContext, bot: Bot):
 
     if not text.isdigit():
         await message.answer(
-            "❌ Введите целое число.\n"
-            "Например: <code>42</code>",
+            "❌ Введите целое число.\nНапример: <code>42</code>",
             reply_markup=cancel_kb(),
         )
         return
 
     amount = int(text)
-
     if amount < 1:
         await message.answer("❌ Минимум — <b>1</b> Star.", reply_markup=cancel_kb())
         return
-
     if amount > 10000:
         await message.answer("❌ Максимум — <b>10000</b> Stars.", reply_markup=cancel_kb())
         return
 
-    # Отправляем invoice на введённую сумму (1:1, без бонуса)
     try:
         from aiogram.types import LabeledPrice
         await bot.send_invoice(
@@ -320,7 +322,6 @@ async def input_target(message: Message, state: FSMContext, bot: Bot):
     data = await state.get_data()
     service_key = data.get("service", "")
 
-    # Проверка: нельзя мутить/банить админа
     if service_key in ("mute", "ban"):
         is_adm = await user_is_admin(bot, GROUP_ID, target_id)
         if is_adm:
