@@ -1,5 +1,5 @@
 """
-Обработчики оплаты.
+Обработчики оплаты. Только приватный чат.
 
 Два потока:
 1. ПОПОЛНЕНИЕ БАЛАНСА: topup → Telegram Stars invoice → successful_payment → баланс +N
@@ -21,12 +21,16 @@ from database import (
     add_purchase, get_user_balance, add_balance, ensure_user,
 )
 from utils import format_stars
-from keyboards.inline import back_to_menu_kb, topup_kb
+from keyboards.inline import back_to_menu_kb
 
 import services as svc_module
 
 logger = logging.getLogger(__name__)
+
+# ── Роутер только для ПРИВАТНЫХ чатов ────────────────────────
 router = Router()
+router.message.filter(F.chat.type == "private")
+router.callback_query.filter(F.message.chat.type == "private")
 
 
 # ══════════════════════════════════════════════════════════════
@@ -35,8 +39,8 @@ router = Router()
 
 @router.callback_query(F.data.startswith("topup:"))
 async def topup_send_invoice(call: CallbackQuery, bot: Bot):
-    """Отправляет Telegram Stars invoice для пополнения."""
     key = call.data.split(":")[1]
+    # "custom" обрабатывается в user.py, сюда не попадёт
     package = TOPUP_PACKAGES.get(key)
     if not package:
         await call.answer("Пакет не найден", show_alert=True)
@@ -61,7 +65,7 @@ async def topup_send_invoice(call: CallbackQuery, bot: Bot):
         await call.answer(f"Ошибка: {e}", show_alert=True)
 
 
-# ── Pre-checkout (обязательно подтвердить за 10 сек) ─────────
+# ── Pre-checkout ─────────────────────────────────────────────
 
 @router.pre_checkout_query()
 async def process_pre_checkout(pre_checkout: PreCheckoutQuery, bot: Bot):
@@ -75,12 +79,10 @@ async def process_successful_payment(message: Message, state: FSMContext, bot: B
     payment = message.successful_payment
     payload = payment.invoice_payload
 
-    # Гарантируем что юзер есть в БД
     user = message.from_user
     await ensure_user(user.id, user.username, user.first_name)
 
     if payload.startswith("topup|"):
-        # ── Пополнение баланса ────────────────────────────
         parts = payload.split("|")
         stars_get = int(parts[2]) if len(parts) > 2 else payment.total_amount
 
@@ -94,7 +96,6 @@ async def process_successful_payment(message: Message, state: FSMContext, bot: B
             reply_markup=back_to_menu_kb(),
         )
     else:
-        # На случай если что-то пришло по старой схеме
         await message.answer(
             "✅ Платёж получен!",
             reply_markup=back_to_menu_kb(),
@@ -109,7 +110,6 @@ async def process_successful_payment(message: Message, state: FSMContext, bot: B
 
 @router.callback_query(F.data.startswith("pay:"), OrderState.confirming)
 async def pay_from_balance(call: CallbackQuery, state: FSMContext, bot: Bot):
-    """Списывает с баланса и применяет услугу."""
     data = await state.get_data()
     service_key = data.get("service", "")
     price = data.get("price", 0)
@@ -121,7 +121,6 @@ async def pay_from_balance(call: CallbackQuery, state: FSMContext, bot: Bot):
 
     buyer_id = call.from_user.id
 
-    # ── Проверяем баланс ──────────────────────────────────
     balance = await get_user_balance(buyer_id)
     if balance < price:
         await call.answer(
@@ -132,14 +131,12 @@ async def pay_from_balance(call: CallbackQuery, state: FSMContext, bot: Bot):
         )
         return
 
-    # ── Списываем ─────────────────────────────────────────
     new_balance = await add_balance(buyer_id, -price)
 
     svc_info = SERVICES.get(service_key, (service_key, "❓", ""))
     name, emoji, _ = svc_info
     chat_id = GROUP_ID
 
-    # ── Сохраняем покупку ─────────────────────────────────
     await add_purchase(
         buyer_id=buyer_id,
         service=service_key,
@@ -150,7 +147,6 @@ async def pay_from_balance(call: CallbackQuery, state: FSMContext, bot: Bot):
         telegram_charge=None,
     )
 
-    # ── Применяем услугу ──────────────────────────────────
     result = "❓ Неизвестная услуга"
 
     try:
@@ -189,12 +185,10 @@ async def pay_from_balance(call: CallbackQuery, state: FSMContext, bot: Bot):
     except Exception as e:
         logger.error(f"Ошибка при применении {service_key}: {e}")
         result = f"❌ Ошибка: {e}"
-        # Возвращаем звёзды при ошибке
         await add_balance(buyer_id, price)
         new_balance = await get_user_balance(buyer_id)
         result += f"\n\n💰 Звёзды возвращены на баланс."
 
-    # ── Если услуга не применилась (текст начинается с ❌) — возврат
     if result.startswith("❌"):
         await add_balance(buyer_id, price)
         new_balance = await get_user_balance(buyer_id)
